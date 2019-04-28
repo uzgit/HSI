@@ -1,74 +1,69 @@
-% READ HYPERSPECTRAL CUBE
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% read header file
-info = read_envihdr('Tray003-1/capture/Tray003-1.hdr');
+image_path = 'Tray001-1/capture/Tray001';
 
-% open raw image
-image = multibandread('Tray003-1/capture/Tray003-1.raw', info.size , 'uint16', 0, 'bil', 'ieee-le');
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Read image header info
+info = read_envihdr(strcat(image_path, '.hdr'));
 
+% Read .raw HSI image
+image = multibandread(strcat(image_path, '.raw'), info.size, 'uint16',0, 'bil', 'ieee-le');
 
-% take away noisy bands
+% Remove noisy bands and create reference sum
 image = image(:,:, 10 : 200);
+refsum = sum(image(1,1,:));
 
-
-% BACKGROUND ELIMINATION
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-% assume pixel (1,1) contains background spectra only
-ref = image(1,1,:);
-
-% create a corresponding reference matrix
-reference_matrix = ones( [info.size(1:2) size(image, 3)] ) .* ref;
-
-% determine similarity of each pixel to the reference (background) pixel at (1,1)
-% determine vector difference
-mask = image - reference_matrix;
-
-% get scalar value for average element-wise difference
-mask = abs(sum(mask, 3)) / 191;
-
-% set values below a threshold to 0, values above a threshold to 1
-mask = mask >= 80;
-
-% filter considers all elements except center element
-filter = [ 1 1 1  ;
-           1 0 1  ;
-           1 1 1 ];
-
-buffer_distance = 3; %pixels
-for i = 1 : buffer_distance
-    % for each (x,y) location in the mask, get the sum of the 8 neighbors
-    sums = conv2(mask, filter, 'same');
-    
-    % only keep pixels that are not touching background (sum == 8)
-    mask = sums == 8;
-end
-
-% element-wise multiplication of image by mask in order to kill background pixels
-image = image .* mask;
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-% FIND AND SORT CONNECTED COMPONENTS
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-[labels, num_connected_components] = bwlabel(mask);
-assert(num_connected_components == 30)
-
-s = regionprops(labels, 'BoundingBox', 'Extrema', 'Centroid');
-centroids = cat(1, s.Centroid);
-x = round(centroids(:,1) / 200);
-y = round(centroids(:,2) / 128);
-[sorted, sort_order] = sortrows([y x]);
-s2 = s(sort_order)
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-imshow(mask)
-hold on
-for k = 1:numel(s2)
-   centroid = s2(k).Centroid;
-   text(centroid(1), centroid(2), sprintf('(%d,%d)', idivide(int16(k-1), int16(5)) + 1, mod(k-1, 5) + 1), 'Color', 'red');
-end
-hold off
-
+% Render original picture
 figure, imagesc(image(:,:,1));
+
+%Remove background
+mask = ((sum(image, 3) - refsum) / 191) > 70;
+
+% Remove objects smaller than 200 pixels
+mask = bwareaopen(mask, 200);
+image = image .* mask;
+
+
+% *******************************************************
+% * Locate each wood chip in the picture and extract it
+% * into a Cell array, this means that we can free the
+% * memory used by the hyperspectral image, the logic
+% * bwimage and just index each cell to get a wood chip 
+% *******************************************************
+% Find bounding boxes around all the wood chips
+s = regionprops(mask, 'BoundingBox');
+Boxes = cat(1,s.BoundingBox);
+
+% Create a Mx1 cell to hold all the wood chips 
+% figure
+C = cell(size(Boxes,1), 1);
+for i = 1:size(Boxes,1)
+    
+    % Get the coordinates of the boxes
+    starty = round(Boxes(i,1));
+    stopy = starty+round(Boxes(i,3))-1;
+    startx = round(Boxes(i,2));
+    stopx = startx+round(Boxes(i,4))-1;
+    
+    % Create a 5x6 subplot and draw all the wood chips in the original image
+    % for debugging
+%     subplot(5,6,i),imagesc(image(startx:stopx,starty:stopy,1))
+    
+    % Store each woodchip into seperate cells
+    C{i} = image(startx:stopx,starty:stopy,:);
+end
+
+% Clear variables
+clear image startx starty stopx stopy boxes i mask Boxes refsum s SIZE mask;
+
+% Create a 5x6 subplot and draw the wood chips in each cell to show that
+% they are the same
+figure
+for i = 1:size(C,1)
+    subplot(5,6,i),imagesc(C{i}(:,:,1))
+end
+
+%image = image.*mask;
+
+%Remove rows
+%image(all(all(image == 0,3),2),:,:) = [];
+%Remove columns
+%image(:,all(all(image == 0,3),1),:) = [];
+
